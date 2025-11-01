@@ -1,0 +1,64 @@
+name: PhaseHound manual build & test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          # base toolchain
+          sudo apt-get install -y build-essential pkg-config
+          # optional SDR hw support
+          sudo apt-get install -y libsoapysdr-dev
+          # (when you add tests that exercise audio, if any deps are needed put them here)
+
+      - name: Build (release profile)
+        run: |
+          make clean
+          make -j$(nproc)
+
+      - name: Run tests
+        run: |
+          # placeholder: adapt once you have ./tests or "make test"
+          if [ -f Makefile ] && grep -q "^test:" Makefile; then
+            make test
+          else
+            echo "No test target yet."
+          fi
+
+      - name: Build with sanitizers (debug profile)
+        run: |
+          # this assumes you add an 'asan' target in your Makefile that enables:
+          #   -fsanitize=address,undefined -fno-omit-frame-pointer
+          # and rebuilds ph-core, ph-cli, and addons
+          if grep -q "^asan:" Makefile; then
+            make clean
+            make asan -j$(nproc)
+          else
+            echo "No asan target yet."
+          fi
+
+      - name: Package artifacts
+        run: |
+          mkdir -p dist
+          # drop whatever is relevant
+          # adjust paths if different in your tree
+          cp ph-core ph-cli dist/ 2>/dev/null || true
+          cp src/addons/*/*.so dist/ 2>/dev/null || true
+          cp -r docs dist/docs 2>/dev/null || true
+          tar czf phasehound-artifacts.tar.gz dist
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phasehound-build
+          path: phasehound-artifacts.tar.gz
+          if-no-files-found: warn
