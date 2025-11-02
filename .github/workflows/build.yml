@@ -82,11 +82,28 @@ jobs:
           echo "TAG=$TAG"           >> "$GITHUB_ENV"
           echo "ARCHIVE=$ARCHIVE"   >> "$GITHUB_ENV"
 
-      - name: Package tarball (+ checksum)
+      - name: Package tarball (no leading ./)
         run: |
-          set -eux
-          tar -C "$BUILD_DIR" -czf "$ARCHIVE" .
+          set -euo pipefail
+          cd "$BUILD_DIR"
+      
+          files=()
+          [ -f ph-core ] && files+=(ph-core)
+          [ -f ph-cli  ] && files+=(ph-cli)
+          [ -d addons  ] && files+=(addons)
+      
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "Nothing to package" >&2
+            exit 1
+          fi
+      
+          tar -czf "../$ARCHIVE" "${files[@]}"
+          cd - >/dev/null
+      
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
+      
+          echo "Archive content:"
+          tar -tf "$ARCHIVE" | sed -n '1,50p'
 
       - name: Upload CI artifact (optional)
         uses: actions/upload-artifact@v4
