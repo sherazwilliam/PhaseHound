@@ -1,4 +1,4 @@
-name: PhaseHound musl release
+name: PhaseHound u22 release
 
 on:
   workflow_dispatch:
@@ -13,26 +13,22 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-latest
-    container: alpine:3.20   # musl userland
+    runs-on: ubuntu-22.04   # <-- older glibc (2.35). If needed older, use ubuntu-20.04 (glibc 2.31)
 
     env:
       BUILD_DIR: dist
 
     steps:
-      - name: Prepare tools
-        run: |
-          set -eux
-          apk add --no-cache \
-            git build-base pkgconfig \
-            soapysdr-dev alsa-lib-dev \
-            ca-certificates github-cli
-          update-ca-certificates || true
-
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build (musl)
+      - name: Install deps
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libsoapysdr-dev libasound2-dev
+
+      - name: Build
         run: |
           set -eux
           make -j"$(nproc)"
@@ -71,17 +67,18 @@ jobs:
           sha="${GITHUB_SHA::7}"
           REL_NAME="${{ inputs.set_name }}"
           [ -n "$REL_NAME" ] || REL_NAME="PhaseHound-unmarked-${sha}"
+          ARCHIVE="phasehound-${sha}-linux-amd64.tar.gz"
+          INTERNAL_TAG="auto-${sha}-u22"   # internal-only; users won’t see/input this
 
-          ARCHIVE="phasehound-linux-musl-${sha}.tar.gz"
-
-          echo "REL_NAME=$REL_NAME" >> "$GITHUB_ENV"
-          echo "ARCHIVE=$ARCHIVE"   >> "$GITHUB_ENV"
+          echo "REL_NAME=$REL_NAME"    >> "$GITHUB_ENV"
+          echo "ARCHIVE=$ARCHIVE"      >> "$GITHUB_ENV"
+          echo "INTERNAL_TAG=$INTERNAL_TAG" >> "$GITHUB_ENV"
 
       - name: Pack tarball (no leading ./)
         run: |
           set -eux
           cd "$BUILD_DIR"
-          files=( )
+          files=()
           [ -f ph-core ] && files+=(ph-core)
           [ -f ph-cli  ] && files+=(ph-cli)
           [ -d addons  ] && files+=(addons)
@@ -104,13 +101,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="auto-musl-${GITHUB_SHA::7}"   # internal tag only
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" "$ARCHIVE" "$ARCHIVE.sha256" \
+          # Create a release pointing to this commit without local git tagging
+          if ! gh release view "$INTERNAL_TAG" >/dev/null 2>&1; then
+            gh release create "$INTERNAL_TAG" "$ARCHIVE" "$ARCHIVE.sha256" \
               --title "$REL_NAME" \
-              --notes "Automated musl build." \
+              --notes "Automated build and packaging." \
               --target "$GITHUB_SHA"
           else
-            gh release upload "$tag" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
-            gh release edit "$tag" --title "$REL_NAME"
+            gh release upload "$INTERNAL_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+            gh release edit "$INTERNAL_TAG" --title "$REL_NAME"
           fi
