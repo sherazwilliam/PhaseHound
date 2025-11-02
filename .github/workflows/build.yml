@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: ubuntu-22.04   # <-- older glibc (2.35). If needed older, use ubuntu-20.04 (glibc 2.31)
+    runs-on: ubuntu-22.04   # glibc 2.35
 
     env:
       BUILD_DIR: dist
@@ -38,13 +38,11 @@ jobs:
           set -euo pipefail
           rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR/addons"
 
-          # binaries
           CORE_PATH="$(find . -maxdepth 2 -type f -name ph-core -perm -111 | head -n1 || true)"
           CLI_PATH="$(find . -maxdepth 2 -type f -name ph-cli  -perm -111 | head -n1 || true)"
           [ -n "${CORE_PATH:-}" ] && install -m0755 "$CORE_PATH" "$BUILD_DIR/ph-core" || echo "WARN: ph-core not found"
           [ -n "${CLI_PATH:-}"  ] && install -m0755 "$CLI_PATH"  "$BUILD_DIR/ph-cli"  || echo "WARN: ph-cli not found"
 
-          # plugins -> ./addons/<name>/ph-lib<name>.so
           if [ -d src/addons ]; then
             for d in src/addons/*; do
               [ -d "$d" ] || continue
@@ -68,10 +66,10 @@ jobs:
           REL_NAME="${{ inputs.set_name }}"
           [ -n "$REL_NAME" ] || REL_NAME="PhaseHound-unmarked-${sha}"
           ARCHIVE="phasehound-${sha}-linux-amd64.tar.gz"
-          INTERNAL_TAG="auto-${sha}-u22"   # internal-only; users won’t see/input this
+          INTERNAL_TAG="auto-${sha}-u22"   # internal-only
 
-          echo "REL_NAME=$REL_NAME"    >> "$GITHUB_ENV"
-          echo "ARCHIVE=$ARCHIVE"      >> "$GITHUB_ENV"
+          echo "REL_NAME=$REL_NAME"        >> "$GITHUB_ENV"
+          echo "ARCHIVE=$ARCHIVE"          >> "$GITHUB_ENV"
           echo "INTERNAL_TAG=$INTERNAL_TAG" >> "$GITHUB_ENV"
 
       - name: Pack tarball (no leading ./)
@@ -94,20 +92,31 @@ jobs:
           path: |
             ${{ env.ARCHIVE }}
             ${{ env.ARCHIVE }}.sha256
+            ${{ env.BUILD_DIR }}/ph-core
+            ${{ env.BUILD_DIR }}/ph-cli
+            ${{ env.BUILD_DIR }}/addons/*/ph-lib*.so
           retention-days: 7
 
-      - name: Publish GitHub Release (no local tagging)
+      - name: Publish GitHub Release (tarball + individual files; no local tagging)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Create a release pointing to this commit without local git tagging
+
+          # Build a file list: tarball + checksum + individual artifacts
+          FILES=()
+          FILES+=("$ARCHIVE" "$ARCHIVE.sha256")
+          [ -f "$BUILD_DIR/ph-core" ] && FILES+=("$BUILD_DIR/ph-core")
+          [ -f "$BUILD_DIR/ph-cli"  ] && FILES+=("$BUILD_DIR/ph-cli")
+          while IFS= read -r so; do FILES+=("$so"); done < <(find "$BUILD_DIR/addons" -type f -name 'ph-lib*.so' -print | sort)
+
+          # Create or update the release; GitHub flattens path to basenames in asset list
           if ! gh release view "$INTERNAL_TAG" >/dev/null 2>&1; then
-            gh release create "$INTERNAL_TAG" "$ARCHIVE" "$ARCHIVE.sha256" \
+            gh release create "$INTERNAL_TAG" "${FILES[@]}" \
               --title "$REL_NAME" \
-              --notes "Automated build and packaging." \
+              --notes "Automated build with both full archive and individual artifacts." \
               --target "$GITHUB_SHA"
           else
-            gh release upload "$INTERNAL_TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+            gh release upload "$INTERNAL_TAG" "${FILES[@]}" --clobber
             gh release edit "$INTERNAL_TAG" --title "$REL_NAME"
           fi
