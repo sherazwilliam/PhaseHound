@@ -1,4 +1,4 @@
-name: PhaseHound simple release
+name: PhaseHound musl release
 
 on:
   workflow_dispatch:
@@ -14,38 +14,41 @@ permissions:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    container: alpine:3.20   # musl userland
 
     env:
       BUILD_DIR: dist
 
     steps:
+      - name: Prepare tools
+        run: |
+          set -eux
+          apk add --no-cache \
+            git build-base pkgconfig \
+            soapysdr-dev alsa-lib-dev \
+            ca-certificates github-cli
+          update-ca-certificates || true
+
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install deps
-        run: |
-          set -eux
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libsoapysdr-dev libasound2-dev
-
-      - name: Build
+      - name: Build (musl)
         run: |
           set -eux
           make -j"$(nproc)"
 
-      - name: Assemble release skeleton
+      - name: Stage release skeleton
         run: |
           set -euo pipefail
-          rm -rf "$BUILD_DIR"
-          mkdir -p "$BUILD_DIR/addons"
+          rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR/addons"
 
-          # Pick up binaries (root or shallow dirs)
+          # binaries
           CORE_PATH="$(find . -maxdepth 2 -type f -name ph-core -perm -111 | head -n1 || true)"
           CLI_PATH="$(find . -maxdepth 2 -type f -name ph-cli  -perm -111 | head -n1 || true)"
-          [ -n "${CORE_PATH:-}" ] && install -m 0755 "$CORE_PATH" "$BUILD_DIR/ph-core" || echo "WARN: ph-core not found"
-          [ -n "${CLI_PATH:-}"  ] && install -m 0755 "$CLI_PATH"  "$BUILD_DIR/ph-cli"  || echo "WARN: ph-cli not found"
+          [ -n "${CORE_PATH:-}" ] && install -m0755 "$CORE_PATH" "$BUILD_DIR/ph-core" || echo "WARN: ph-core not found"
+          [ -n "${CLI_PATH:-}"  ] && install -m0755 "$CLI_PATH"  "$BUILD_DIR/ph-cli"  || echo "WARN: ph-cli not found"
 
-          # src/addons/<name>/*.so  →  ./addons/<name>/ph-lib<name>.so
+          # plugins -> ./addons/<name>/ph-lib<name>.so
           if [ -d src/addons ]; then
             for d in src/addons/*; do
               [ -d "$d" ] || continue
@@ -65,50 +68,32 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
-          shortsha="${GITHUB_SHA::7}"
+          sha="${GITHUB_SHA::7}"
           REL_NAME="${{ inputs.set_name }}"
-          if [ -z "$REL_NAME" ]; then
-            REL_NAME="PhaseHound-unmarked-${shortsha}"
-          fi
-          # internal tag (not an input) required by GitHub; keep it boring/unique
-          TAG="auto-${shortsha}"
-          ARCHIVE="phasehound-${shortsha}-linux-amd64.tar.gz"
+          [ -n "$REL_NAME" ] || REL_NAME="PhaseHound-unmarked-${sha}"
 
-          echo "rel_name=$REL_NAME" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG"           >> "$GITHUB_OUTPUT"
-          echo "archive=$ARCHIVE"   >> "$GITHUB_OUTPUT"
+          ARCHIVE="phasehound-linux-musl-${sha}.tar.gz"
 
           echo "REL_NAME=$REL_NAME" >> "$GITHUB_ENV"
-          echo "TAG=$TAG"           >> "$GITHUB_ENV"
           echo "ARCHIVE=$ARCHIVE"   >> "$GITHUB_ENV"
 
-      - name: Package tarball (no leading ./)
+      - name: Pack tarball (no leading ./)
         run: |
-          set -euo pipefail
+          set -eux
           cd "$BUILD_DIR"
-      
-          files=()
+          files=( )
           [ -f ph-core ] && files+=(ph-core)
           [ -f ph-cli  ] && files+=(ph-cli)
           [ -d addons  ] && files+=(addons)
-      
-          if [ "${#files[@]}" -eq 0 ]; then
-            echo "Nothing to package" >&2
-            exit 1
-          fi
-      
           tar -czf "../$ARCHIVE" "${files[@]}"
           cd - >/dev/null
-      
           sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
-      
-          echo "Archive content:"
-          tar -tf "$ARCHIVE" | sed -n '1,50p'
+          echo "Archive content:"; tar -tf "$ARCHIVE" | sed -n '1,50p'
 
       - name: Upload CI artifact (optional)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.rel_name }}
+          name: ${{ env.REL_NAME }}
           path: |
             ${{ env.ARCHIVE }}
             ${{ env.ARCHIVE }}.sha256
@@ -119,17 +104,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Release title decided earlier into $REL_NAME, archive path in $ARCHIVE
-          shortsha="${GITHUB_SHA::7}"
-          TAG="auto-${shortsha}"
-      
-          # If the release doesn't exist, create it and point the tag at this commit
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" \
+          tag="auto-musl-${GITHUB_SHA::7}"   # internal tag only
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" "$ARCHIVE" "$ARCHIVE.sha256" \
               --title "$REL_NAME" \
-              --notes "Automated build and packaging." \
+              --notes "Automated musl build." \
               --target "$GITHUB_SHA"
           else
-            gh release upload "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
-            gh release edit "$TAG" --title "$REL_NAME"
+            gh release upload "$tag" "$ARCHIVE" "$ARCHIVE.sha256" --clobber
+            gh release edit "$tag" --title "$REL_NAME"
           fi
