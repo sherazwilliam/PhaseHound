@@ -1,63 +1,73 @@
-#ifndef AUDIOSINK_H
-#define AUDIOSINK_H
-
-#include <stdint.h>
-#include <stdbool.h>
+#pragma once
 #include <alsa/asoundlib.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stddef.h>
 
-// This struct MUST match the producer (wfmd).
-// If wfmd already defines something equivalent in a header, you can delete
-// this and include that instead. But right now we inline it so we compile.
-typedef struct __attribute__((packed)) {
-    uint32_t magic;          // producer sets some magic like 'PAU1'
-    uint32_t sample_rate;    // Hz (e.g. 48000)
-    uint32_t channels;       // 1 for mono
-    uint32_t bytes_per_samp; // 4 for float32
-    uint32_t fmt;            // 1 = float32 mono right now
-    uint32_t ring_bytes;     // size of audio ring buffer in bytes
-    uint32_t wr_idx;         // producer write cursor (mod ring_bytes)
-    uint32_t rd_idx;         // consumer read cursor (we advance this)
+/* PhaseHound Audio ring header (producer: wfmd/dmr) */
+#ifndef PHAU_MAGIC
+#define PHAU_MAGIC 0x50484155u /* "PHAU" */
+#endif
+#ifndef PHAU_VER
+#define PHAU_VER   0x00010000u
+#endif
+#ifndef PHAU_FMT_F32
+#define PHAU_FMT_F32 1u
+#endif
+
+typedef struct {
+    uint32_t magic, version;
+    _Atomic uint64_t seq;
+    _Atomic uint64_t wpos;
+    _Atomic uint64_t rpos;
+    uint32_t capacity;        /* bytes in data[] */
+    uint32_t used;            /* producer-written bytes (may be <=capacity) */
+    uint32_t bytes_per_samp;  /* e.g. 4 for f32 */
+    uint32_t channels;        /* 1 mono, 2 stereo */
+    double   sample_rate;     /* Hz */
+    uint32_t fmt;             /* 1=f32le */
+    uint8_t  reserved[64];
+    uint8_t  data[];
 } phau_hdr_t;
 
-// runtime state for audiosink addon
+/* Runtime state for audiosink */
 typedef struct {
-    // broker/IPC file descriptors etc. will live in here. We don't know all of
-    // your broker types, so we just keep generic ints and strings.
+    /* broker */
+    int fd;                   /* UDS to core */
+    char name[32];            /* "audiosink" */
+    char feed_in[64];         /* "audiosink.config.in"  */
+    char feed_out[64];        /* "audiosink.config.out" */
 
-    // feeds
-    int feed_cfg_in;     // audiosink.config.in
-    int feed_cfg_out;    // audiosink.config.out
-    int feed_status;     // audiosink.status
+    /* subscription */
+    char current_feed[128];   /* e.g. "wfmd.audio-info" */
 
-    // subscription info for upstream audio feed
-    int sub_feed_id;     // broker subscription handle / feed id
-    int audio_fd;        // memfd received from wfmd
-    phau_hdr_t *hdr;     // mmap'ed header
-    uint8_t *ring;       // mmap'ed ring data
-    size_t map_len;      // total mmap length
+    /* memfd ring */
+    int         memfd;        /* -1 if none */
+    phau_hdr_t *hdr;          /* mmap base */
+    size_t      map_bytes;    /* mmap length */
 
-    // ALSA
-    char device[128];    // "default", "hw:0,0", etc.
-    snd_pcm_t *pcm;
-    unsigned int pcm_rate;
-    unsigned int pcm_channels;
-    snd_pcm_format_t pcm_fmt;
-    bool using_fallback;
+    /* ALSA */
+    char        alsa_dev[128];/* "default" or "hw:0,0" */
+    snd_pcm_t  *pcm;
+    unsigned    pcm_rate;
+    unsigned    pcm_ch;
 
-    // stats
-    uint32_t xruns;
-    uint32_t frames_sent;
-    uint32_t frames_lost;
+    /* threads */
+    _Atomic bool play_run;
+    _Atomic bool cmd_run;
+    pthread_t   th_play;
+    pthread_t   th_cmd;
 
-    // run flag
-    int running;
+    /* misc */
+    _Atomic bool started;
 } audiosink_t;
 
+/* ring */
+int  au_ring_map_from_fd(audiosink_t *s, int fd);
+void au_ring_close(audiosink_t *s);
+size_t au_ring_pop_f32(audiosink_t *s, float *dst, size_t max_frames);
 
-// The core is expected to dlsym these 3:
-int  addon_init(void);     // called once after dlopen
-void addon_step(void);     // called repeatedly in core loop
-void addon_fini(void);     // called before dlclose
-
-#endif // AUDIOSINK_H
-
+/* alsa */
+int  au_pcm_open(audiosink_t *s, unsigned rate, unsigned ch);
+void au_pcm_close(audiosink_t *s);

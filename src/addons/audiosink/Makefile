@@ -7,7 +7,11 @@ INCS = -I../../../include
 NAME := audiosink
 SO := ph-lib$(NAME).so
 
-SRCS_SO := src/$(NAME).c ../../../src/common.c
+SRCS_SO := src/$(NAME).c \
+src/audiosink_alsa.c \
+src/audiosink_ring.c \
+../../../src/common.c \
+../../../src/common/ctrlmsg.c \
 
 all: $(SO)
 

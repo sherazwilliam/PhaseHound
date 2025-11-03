@@ -7,7 +7,7 @@ INCS = -I../../../include
 NAME := dummy
 SO := ph-lib$(NAME).so
 
-SRCS_SO := src/$(NAME).c ../../../src/common.c
+SRCS_SO := src/$(NAME).c ../../../src/common.c ../../../src/common/ctrlmsg.c 
 
 all: $(SO)
 
