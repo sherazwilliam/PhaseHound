@@ -28,7 +28,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libsoapysdr-dev libasound2-dev
+          sudo apt-get install -y build-essential pkg-config libsoapysdr-dev libasound2-dev zip
 
       - name: Build
         run: |
@@ -55,11 +55,10 @@ jobs:
           if [[ -n "${{ inputs.set_name }}" ]]; then
             NAME="${{ inputs.set_name }}"
           else
-            # fallback to repo name
             NAME="${GITHUB_REPOSITORY##*/}"
           fi
 
-          # Make sure we have tags and compute sha7
+          # Ensure tags and compute sha7
           git fetch --tags --force --quiet
           SHA7=$(git rev-parse --short=7 HEAD)
 
@@ -97,10 +96,8 @@ jobs:
           # Zip a single bundle too
           (cd "$BUILD_DIR" && zip -9r "$BIN_ZIP" .)
 
-      - name: Install GitHub CLI
-        uses: cli/cli@v2
-        with:
-          version: latest
+      - name: Verify gh availability
+        run: gh --version
 
       - name: Create or update release
         env:
