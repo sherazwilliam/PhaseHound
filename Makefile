@@ -15,6 +15,9 @@ CLI_SRCS  = tools/cli.c src/common.c
 CLI_OBJS  = $(CLI_SRCS:.c=.o)
 CLI_BIN   = ph-cli
 
+GIT_SHA := $(shell git rev-parse --short=7 HEAD 2>/dev/null || echo unknown)
+CFLAGS  += -DPH_GIT_SHA=\"$(GIT_SHA)\"
+
 .PHONY: all clean addons install
 
 all: $(CORE_BIN) $(CLI_BIN) addons addons

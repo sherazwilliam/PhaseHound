@@ -15,6 +15,11 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#include "ph_version.h"
+#ifndef PH_GIT_SHA
+#define PH_GIT_SHA "unknown"
+#endif
+
 // Safe path join into dst of size cap. Returns 0 on success, -1 on truncation.
 static int path_join(char *dst, size_t cap, const char *a, const char *b){
     size_t la = strlen(a), lb = strlen(b);
@@ -252,7 +257,7 @@ int main(void){
 
     g_listen_fd = uds_listen_create(PH_SOCK_PATH);
     if(g_listen_fd<0){ log_msg(LOG_ERROR, "failed to create UDS server"); return 1; }
-    log_msg(LOG_INFO, "core listening on %s", PH_SOCK_PATH);
+    log_msg(LOG_INFO, "PhaseHound-core %s (%s)  listening on %s", PH_VERSION_STRING, PH_GIT_SHA, PH_SOCK_PATH);
 
     // core subscribes to cli-control
     feedtab_ensure(&g_feeds, "cli-control");

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       set_name:
-        description: 'Release name (optional). If empty → PhaseHound-unmarked-<sha7>'
+        description: 'Release name prefix (optional). If empty → repo name'
         required: false
         type: string
 
@@ -16,15 +16,17 @@ jobs:
     runs-on: ubuntu-22.04   # glibc 2.35
 
     env:
-      BUILD_DIR: dist
+      BUILD_DIR: dist        # where we stage artifacts
+      BIN_ZIP: phasehound-bundle.zip
 
     steps:
-      - name: Checkout
+      - name: Checkout (full history + tags)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install deps
         run: |
-          set -eux
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libsoapysdr-dev libasound2-dev
 
@@ -33,88 +35,94 @@ jobs:
           set -eux
           make -j"$(nproc)"
 
-      - name: Stage release skeleton
+      - name: Read version from header
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          HDR="include/ph_version.h"
+          if [[ ! -f "$HDR" ]]; then
+            echo "::error file=$HDR::version header not found"; exit 1
+          fi
+
+          # Extract PH_VERSION_STRING "..." from the header
+          VER=$(awk -F\" '/#define[ \t]+PH_VERSION_STRING/ {print $2}' "$HDR")
+          if [[ -z "${VER:-}" ]]; then
+            echo "::error::PH_VERSION_STRING not found in $HDR"; exit 1
+          fi
+
+          # Decide the base name shown to users
+          if [[ -n "${{ inputs.set_name }}" ]]; then
+            NAME="${{ inputs.set_name }}"
+          else
+            # fallback to repo name
+            NAME="${GITHUB_REPOSITORY##*/}"
+          fi
+
+          # Make sure we have tags and compute sha7
+          git fetch --tags --force --quiet
+          SHA7=$(git rev-parse --short=7 HEAD)
+
+          # If a tag equal to the version already exists, suffix both release name and tag with -<sha7>
+          if git rev-parse -q --verify "refs/tags/${VER}" >/dev/null; then
+            TAG="${VER}-${SHA7}"
+            REL_NAME="${NAME}-${VER}-${SHA7}"
+          else
+            TAG="${VER}"
+            REL_NAME="${NAME}-${VER}"
+          fi
+
+          echo "version=$VER"        >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG"            >> "$GITHUB_OUTPUT"
+          echo "rel_name=$REL_NAME"  >> "$GITHUB_OUTPUT"
+          echo "sha7=$SHA7"          >> "$GITHUB_OUTPUT"
+
+      - name: Stage release artifacts
         run: |
           set -euo pipefail
           rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR/addons"
 
+          # Gather built binaries (adjust paths if yours differ)
           CORE_PATH="$(find . -maxdepth 2 -type f -name ph-core -perm -111 | head -n1 || true)"
           CLI_PATH="$(find . -maxdepth 2 -type f -name ph-cli  -perm -111 | head -n1 || true)"
-          [ -n "${CORE_PATH:-}" ] && install -m0755 "$CORE_PATH" "$BUILD_DIR/ph-core" || echo "WARN: ph-core not found"
-          [ -n "${CLI_PATH:-}"  ] && install -m0755 "$CLI_PATH"  "$BUILD_DIR/ph-cli"  || echo "WARN: ph-cli not found"
+          [[ -n "$CORE_PATH" && -x "$CORE_PATH" ]] && cp -v "$CORE_PATH" "$BUILD_DIR/ph-core"
+          [[ -n "$CLI_PATH"  && -x "$CLI_PATH"  ]] && cp -v "$CLI_PATH"  "$BUILD_DIR/ph-cli"
 
-          if [ -d src/addons ]; then
-            for d in src/addons/*; do
-              [ -d "$d" ] || continue
-              name="$(basename "$d")"
-              so="$(find "$d" -maxdepth 1 -type f -name '*.so' | head -n1 || true)"
-              if [ -n "${so:-}" ]; then
-                mkdir -p "$BUILD_DIR/addons/$name"
-                cp "$so" "$BUILD_DIR/addons/$name/ph-lib${name}.so"
-              fi
-            done
-          fi
+          # Collect addons (*.so)
+          while IFS= read -r so; do
+            dest="$BUILD_DIR/addons/$(basename "$so")"
+            cp -v "$so" "$dest"
+          done < <(find src/addons -type f -name 'ph-lib*.so' -print | sort)
 
-          echo "Release tree:"
-          find "$BUILD_DIR" -type f | sort
+          # Zip a single bundle too
+          (cd "$BUILD_DIR" && zip -9r "$BIN_ZIP" .)
 
-      - name: Name release & archive
-        id: meta
-        run: |
-          set -euo pipefail
-          sha="${GITHUB_SHA::7}"
-          REL_NAME="${{ inputs.set_name }}"
-          [ -n "$REL_NAME" ] || REL_NAME="PhaseHound-unmarked-${sha}"
-          ARCHIVE="phasehound-${sha}-linux-amd64.tar.gz"
-          INTERNAL_TAG="auto-${sha}-u22"   # internal-only
-
-          echo "REL_NAME=$REL_NAME"        >> "$GITHUB_ENV"
-          echo "ARCHIVE=$ARCHIVE"          >> "$GITHUB_ENV"
-          echo "INTERNAL_TAG=$INTERNAL_TAG" >> "$GITHUB_ENV"
-
-      - name: Pack tarball (no leading ./)
-        run: |
-          set -eux
-          cd "$BUILD_DIR"
-          files=()
-          [ -f ph-core ] && files+=(ph-core)
-          [ -f ph-cli  ] && files+=(ph-cli)
-          [ -d addons  ] && files+=(addons)
-          tar -czf "../$ARCHIVE" "${files[@]}"
-          cd - >/dev/null
-          sha256sum "$ARCHIVE" > "$ARCHIVE.sha256"
-          echo "Archive content:"; tar -tf "$ARCHIVE" | sed -n '1,50p'
-
-      - name: Upload CI artifact (optional)
-        uses: actions/upload-artifact@v4
+      - name: Install GitHub CLI
+        uses: cli/cli@v2
         with:
-          name: ${{ env.REL_NAME }}
-          path: |
-            ${{ env.ARCHIVE }}
-            ${{ env.ARCHIVE }}.sha256
-            ${{ env.BUILD_DIR }}/ph-core
-            ${{ env.BUILD_DIR }}/ph-cli
-            ${{ env.BUILD_DIR }}/addons/*/ph-lib*.so
-          retention-days: 7
+          version: latest
 
-      - name: Publish GitHub Release (tarball + individual files; no local tagging)
+      - name: Create or update release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INTERNAL_TAG: ${{ steps.ver.outputs.tag }}
+          REL_NAME: ${{ steps.ver.outputs.rel_name }}
         run: |
           set -euo pipefail
+          cd "$BUILD_DIR"
 
-          # Build a file list: tarball + checksum + individual artifacts
+          # Assets list
           FILES=()
-          FILES+=("$ARCHIVE" "$ARCHIVE.sha256")
-          [ -f "$BUILD_DIR/ph-core" ] && FILES+=("$BUILD_DIR/ph-core")
-          [ -f "$BUILD_DIR/ph-cli"  ] && FILES+=("$BUILD_DIR/ph-cli")
-          while IFS= read -r so; do FILES+=("$so"); done < <(find "$BUILD_DIR/addons" -type f -name 'ph-lib*.so' -print | sort)
+          [[ -f "ph-core" ]] && FILES+=("ph-core")
+          [[ -f "ph-cli"  ]] && FILES+=("ph-cli")
+          while IFS= read -r so; do FILES+=("$so"); done < <(find addons -type f -name 'ph-lib*.so' -print | sort)
+          [[ -f "$BIN_ZIP" ]] && FILES+=("$BIN_ZIP")
 
-          # Create or update the release; GitHub flattens path to basenames in asset list
+          # Create or update the release; GitHub flattens paths in asset list
           if ! gh release view "$INTERNAL_TAG" >/dev/null 2>&1; then
             gh release create "$INTERNAL_TAG" "${FILES[@]}" \
               --title "$REL_NAME" \
-              --notes "Automated build with both full archive and individual artifacts." \
+              --notes "Automated build for ${REL_NAME}" \
               --target "$GITHUB_SHA"
           else
             gh release upload "$INTERNAL_TAG" "${FILES[@]}" --clobber
