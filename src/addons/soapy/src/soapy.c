@@ -27,6 +27,7 @@
 #include "plugin.h"
 #include "common.h"
 #include "ctrlmsg.h"   // control-plane helpers
+#include "ph_stream.h"
 
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001
@@ -59,31 +60,6 @@ static int create_shm_fd(const char *tag, size_t bytes){
     return fd;
 }
 static void sleep_ms(int ms){ struct timespec ts={ ms/1000, (ms%1000)*1000000L }; nanosleep(&ts,NULL); }
-
-/* ---------- IQ ring header (absolute counters) ---------- */
-typedef enum {
-    PHIQ_FMT_CF32 = 1, // interleaved I,Q float32 (8 bytes/frame)
-    PHIQ_FMT_CS16 = 2  // interleaved I,Q int16  (4 bytes/frame)
-} phiq_fmt_t;
-
-typedef struct {
-    uint32_t magic;               // 'PHIQ'
-    uint32_t version;
-    _Atomic uint64_t seq;         // increments per write
-    _Atomic uint64_t wpos;        // ABSOLUTE bytes written
-    _Atomic uint64_t rpos;        // ABSOLUTE bytes read (by consumer)
-    uint32_t capacity;            // ring size in bytes (data[])
-    uint32_t used;                // optional mirror; producer may fill (consumer ignores)
-    uint32_t bytes_per_samp;      // bytes per COMPLEX frame (I+Q together)
-    uint32_t channels;            // 1 (complex stream)
-    double   sample_rate;
-    double   center_freq;
-    uint32_t fmt;                 // phiq_fmt_t
-    uint8_t  reserved[64];
-    uint8_t  data[];
-} phiq_hdr_t;
-
-enum { MAGIC_PHIQ = 0x51494850u /* 'P''H''I''Q' */, PHIQ_VERSION=1u };
 
 /* ---------- addon state ---------- */
 static const char *g_sock = NULL;
@@ -122,20 +98,38 @@ static void publish_txt(const char *feed, const char *txt){
     snprintf(js,sizeof js,"{\"txt\":\"%s\"}",esc);
     ph_publish(g_ctrl.fd, feed, js);
 }
+
 static void publish_iq_memfd(void){
     if(g_memfd<0 || !g_hdr) return;
     char js[POC_MAX_JSON];
-    /* Normalized SHM meta: phasehound.iq-ring.v0 */
+
+    const char *enc = "unknown";
+    if (g_hdr->fmt == PHIQ_FMT_CF32) enc = "cf32";
+    else if (g_hdr->fmt == PHIQ_FMT_CS16) enc = "cs16";
+
+    /* Normalized SHM meta: phasehound.iq-ring.v0 + stream hints */
     int n = snprintf(js, sizeof js,
-        "{\"type\":\"publish\",\"feed\":\"%s\","
-        "\"subtype\":\"shm_map\","
-        "\"proto\":\"phasehound.iq-ring.v0\","
-        "\"version\":\"0.1\","
-        "\"size\":%u,"
-        "\"desc\":\"Soapy IQ ring (cf=%.3f MHz,sr=%.3f Msps)\","
-        "\"mode\":\"r\"}",
+        "{"
+          "\"type\":\"publish\","
+          "\"feed\":\"%s\","
+          "\"subtype\":\"shm_map\","
+          "\"proto\":\"" PH_PROTO_IQ_RING "\","
+          "\"version\":\"0.1\","
+          "\"size\":%u,"
+          "\"mode\":\"r\","
+          "\"kind\":\"iq\","
+          "\"encoding\":\"%s\","
+          "\"sample_rate\":%.0f,"
+          "\"channels\":%u,"
+          "\"center_freq\":%.0f,"
+          "\"desc\":\"Soapy IQ ring (cf=%.3f MHz,sr=%.3f Msps)\""
+        "}",
         FEED_IQ_INFO,
         g_hdr->capacity,
+        enc,
+        g_hdr->sample_rate,
+        g_hdr->channels,
+        g_hdr->center_freq,
         g_hdr->center_freq/1e6,
         g_hdr->sample_rate/1e6);
     int fds[1]={ g_memfd };
@@ -155,7 +149,7 @@ static int iq_ring_open(size_t capacity_bytes, double sr, double cf, phiq_fmt_t 
 
     g_memfd = fd; g_hdr = (phiq_hdr_t*)map; g_map_bytes = total;
     memset(g_hdr, 0, sizeof(phiq_hdr_t));
-    g_hdr->magic = MAGIC_PHIQ;
+    g_hdr->magic = PHIQ_MAGIC;
     g_hdr->version = PHIQ_VERSION;
     atomic_store(&g_hdr->seq,  0);
     atomic_store(&g_hdr->wpos, 0);

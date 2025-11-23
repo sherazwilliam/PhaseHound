@@ -23,6 +23,7 @@
 #include "plugin.h"
 #include "common.h"
 #include "ctrlmsg.h"  // shared helpers (advertise/dispatch/replies)
+#include "ph_stream.h"
 
 #ifndef MFD_CLOEXEC
 #define MFD_CLOEXEC 0x0001
@@ -53,46 +54,6 @@ static int create_shm_fd(const char *tag, size_t bytes){
     return fd;
 }
 static void sleep_ms(int ms){ struct timespec ts={ ms/1000, (ms%1000)*1000000L }; nanosleep(&ts,NULL); }
-
-/* ---------- shared ring headers ---------- */
-/* audio ring */
-typedef struct {
-    uint32_t magic, version;
-    _Atomic uint64_t seq, wpos, rpos;
-    uint32_t capacity, used;
-    uint32_t bytes_per_samp;
-    uint32_t channels;
-    double   sample_rate;
-    uint32_t fmt;
-    uint8_t  reserved[64];
-    uint8_t  data[];
-} phau_hdr_t;
-
-enum { PHAU_FMT_F32 = 1 };
-enum { PHAU_MAGIC   = 0x50484155, PHAU_VER = 0x00010000 };
-
-/* IQ ring (from soapy addon) */
-typedef enum {
-    PHIQ_FMT_CF32 = 1,
-    PHIQ_FMT_CS16 = 2
-} phiq_fmt_t;
-
-typedef struct {
-    uint32_t magic;
-    uint32_t version;
-    _Atomic uint64_t seq;
-    _Atomic uint64_t wpos;
-    _Atomic uint64_t rpos;
-    uint32_t capacity;
-    uint32_t used;            /* producer-owned; consumer ignores/modifies no more */
-    uint32_t bytes_per_samp;  /* bytes per complex frame (I,Q interleaved) */
-    uint32_t channels;
-    double   sample_rate;
-    double   center_freq;
-    uint32_t fmt;             /* phiq_fmt_t */
-    uint8_t  reserved[64];
-    uint8_t  data[];
-} phiq_hdr_t;
 
 /* ---------- global state ---------- */
 static _Atomic int g_run = 0;
@@ -546,20 +507,34 @@ static void demod_from_iq_ring(void){
     free(tmp);
 }
 
-/* ---------- audio memfd (re)publish ---------- */
 static void wfmd_publish_memfd(int fd){
     if(!g_ring.hdr) return;
     char js[POC_MAX_JSON];
+
+    const char *enc = "f32";
+    unsigned ch = g_ring.hdr->channels ? g_ring.hdr->channels : 1;
+    double   fs = g_ring.hdr->sample_rate;
+
     int n = snprintf(js, sizeof js,
-        "{\"type\":\"publish\",\"feed\":\"%s\","
-        "\"subtype\":\"shm_map\","
-        "\"proto\":\"phasehound.audio-ring.v0\","
-        "\"version\":\"0.1\","
-        "\"size\":%u,"
-        "\"desc\":\"WFMD audio ring (f32 mono)\","
-        "\"mode\":\"rw\"}",
+        "{"
+          "\"type\":\"publish\","
+          "\"feed\":\"%s\","
+          "\"subtype\":\"shm_map\","
+          "\"proto\":\"" PH_PROTO_AUDIO_RING "\","
+          "\"version\":\"0.1\","
+          "\"size\":%u,"
+          "\"mode\":\"rw\","
+          "\"kind\":\"audio\","
+          "\"encoding\":\"%s\","
+          "\"sample_rate\":%.0f,"
+          "\"channels\":%u,"
+          "\"desc\":\"WFMD audio ring (f32)\""
+        "}",
         "wfmd.audio-info",
-        g_ring.hdr->capacity);
+        g_ring.hdr->capacity,
+        enc,
+        fs,
+        ch);
     int fds[1] = { g_ring.memfd };
     send_frame_json_with_fds(fd, js, (size_t)n, fds, 1);
 }

@@ -4,32 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
-
-/* PhaseHound Audio ring header (producer: wfmd/dmr) */
-#ifndef PHAU_MAGIC
-#define PHAU_MAGIC 0x50484155u /* "PHAU" */
-#endif
-#ifndef PHAU_VER
-#define PHAU_VER   0x00010000u
-#endif
-#ifndef PHAU_FMT_F32
-#define PHAU_FMT_F32 1u
-#endif
-
-typedef struct {
-    uint32_t magic, version;
-    _Atomic uint64_t seq;
-    _Atomic uint64_t wpos;
-    _Atomic uint64_t rpos;
-    uint32_t capacity;        /* bytes in data[] */
-    uint32_t used;            /* producer-written bytes (may be <=capacity) */
-    uint32_t bytes_per_samp;  /* e.g. 4 for f32 */
-    uint32_t channels;        /* 1 mono, 2 stereo */
-    double   sample_rate;     /* Hz */
-    uint32_t fmt;             /* 1=f32le */
-    uint8_t  reserved[64];
-    uint8_t  data[];
-} phau_hdr_t;
+#include "ph_stream.h"
 
 /* Runtime state for audiosink */
 typedef struct {
